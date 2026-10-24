@@ -867,6 +867,7 @@ impl Controller {
         });
         let agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            .ip_family(ureq::config::IpFamily::Ipv4Only)
             .timeout_connect(Some(Duration::from_secs(20)))
             .timeout_recv_response(Some(Duration::from_secs(180)))
             .build()

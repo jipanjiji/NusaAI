@@ -920,6 +920,7 @@ pub fn kill_all_bg() {
 fn http() -> ureq::Agent {
     ureq::Agent::config_builder()
         .http_status_as_error(false)
+        .ip_family(ureq::config::IpFamily::Ipv4Only)
         .timeout_global(Some(Duration::from_secs(30)))
         .user_agent(UA)
         .build()
