@@ -1,6 +1,6 @@
 # Nusa AI ⚡
 
-> **The ultra-lightweight, native AI assistant plugin engineered specifically for [Nusa](https://github.com/jipanjiji/Nusa).**  
+> **The ultra-lightweight, native AI assistant plugin engineered specifically for [Nusa](https://rama2555.github.io/nusa/).**  
 > Docks seamlessly beneath the Nusa notch, powered by an advanced autonomous agent with a full suite of system tools — running at an astonishing **< 2 MB RAM footprint**.
 
 ---
@@ -169,7 +169,7 @@ Nusa AI stores your configuration safely in your user profile:
 
 ## 🤝 Companion Projects
 
-- **[Nusa](https://github.com/jipanjiji/Nusa)** — The core Dynamic Island and notch desktop interface for Windows.
+- **[Nusa](https://rama2555.github.io/nusa/)** — The core Dynamic Island and notch desktop interface for Windows.
 
 ---
 
