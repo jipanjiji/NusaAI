@@ -1128,8 +1128,8 @@ fn build_messages_ex(msgs: &[Value], use_vision: bool) -> Vec<Value> {
                 m["content"] = json!(format!("{c}{lang_tag}"));
             }
         }
-        let is_recent_image_turn = Some(i) == last_img_user_idx;
-        if m["role"] == "user" && use_vision && !imgs.is_empty() && is_recent_image_turn {
+        let is_current_turn_image = Some(i) == last_user_idx;
+        if m["role"] == "user" && use_vision && !imgs.is_empty() && is_current_turn_image {
             let txt = m["content"].as_str().unwrap_or("").to_string();
             let mut parts = vec![json!({"type": "text", "text": txt})];
             for im in &imgs {
