@@ -1,0 +1,39 @@
+[package]
+name = "nusa-ai"
+version = "0.1.0"
+edition = "2024"
+default-run = "nusa-ai"
+
+[[bin]]
+name = "nusa-ai"
+path = "src/main.rs"
+
+[[bin]]
+name = "NusaAI-Setup"
+path = "src/installer.rs"
+
+[dependencies]
+base64 = "0.23.1"
+chrono = "0.4.45"
+flate2 = "1.1.10"
+globset = "0.4.20"
+htmd = "0.5.6"
+ignore = "0.4.33"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tao = "0.37.2"
+trash = "5.2.9"
+tray-icon = "0.26.1"
+ureq = "3.5.0"
+# Same versions wry already pulls in (no new crates); used only for the WebView2 virtual-host mapping.
+webview2-com = "0.39.1"
+windows-core = "0.62"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_HiDpi", "Win32_System_Threading", "Win32_Security"] }
+wry = "0.57.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
