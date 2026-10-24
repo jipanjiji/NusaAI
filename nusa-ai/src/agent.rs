@@ -581,6 +581,7 @@ impl Controller {
             repair(&mut st.conv.messages);
             st.conv.save();
             drop(st);
+            trim_working_set();
             match r {
                 Ok(()) => (me.emit)(json!({"t":"done"})),
                 Err(e) => (me.emit)(json!({"t":"error","text":e})),
@@ -874,6 +875,7 @@ impl Controller {
             .new_agent();
         let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
         let body_s = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+        drop(body);
         let resp = agent
             .post(&url)
             .header("Authorization", &format!("Bearer {}", cfg.api_key))
@@ -881,6 +883,8 @@ impl Controller {
             .header("Accept", "text/event-stream")
             .send(body_s.as_bytes())
             .map_err(|e| format!("Connection failed: {e}"))?;
+        drop(body_s);
+        trim_working_set();
         let status = resp.status().as_u16();
         if status >= 400 {
             let mut resp = resp;
@@ -1083,6 +1087,9 @@ fn build_messages_ex(msgs: &[Value], use_vision: bool) -> Vec<Value> {
         "\n\n[Reply strictly in English]"
     };
     let last_user_idx = msgs.iter().rposition(|m| m["role"] == "user");
+    let last_img_user_idx = msgs.iter().rposition(|m| {
+        m["role"] == "user" && m["images"].as_array().map(|a| !a.is_empty()).unwrap_or(false)
+    });
     let mut out = vec![json!({"role":"system","content":system_prompt(last_user)})];
     let n = msgs.len();
     for (i, m) in msgs.iter().enumerate() {
@@ -1121,7 +1128,8 @@ fn build_messages_ex(msgs: &[Value], use_vision: bool) -> Vec<Value> {
                 m["content"] = json!(format!("{c}{lang_tag}"));
             }
         }
-        if m["role"] == "user" && use_vision && !imgs.is_empty() {
+        let is_recent_image_turn = Some(i) == last_img_user_idx;
+        if m["role"] == "user" && use_vision && !imgs.is_empty() && is_recent_image_turn {
             let txt = m["content"].as_str().unwrap_or("").to_string();
             let mut parts = vec![json!({"type": "text", "text": txt})];
             for im in &imgs {

@@ -529,12 +529,31 @@ async function makeThumb(blobOrUrl){
     return out.startsWith('data:image/webp')?out:'';
   }catch(_){return ''}
 }
+async function optimizeImg(fileOrBlob){
+  try{
+    if(fileOrBlob.size && fileOrBlob.size < 400000) return null;
+    const bmp=await createImageBitmap(fileOrBlob);
+    const maxDim=1280;
+    let w=bmp.width,h=bmp.height;
+    if(w<=maxDim && h<=maxDim){bmp.close();return null;}
+    if(w>h){h=Math.round(h*maxDim/w);w=maxDim;}
+    else{w=Math.round(w*maxDim/h);h=maxDim;}
+    thumbCanvas.width=w;thumbCanvas.height=h;
+    thumbCanvas.getContext('2d').drawImage(bmp,0,0,w,h);bmp.close();
+    const out=thumbCanvas.toDataURL('image/jpeg',0.85);thumbCanvas.width=thumbCanvas.height=0;
+    return out.startsWith('data:image/jpeg')?out:null;
+  }catch(_){return null}
+}
 function addFiles(files){
   Array.from(files||[]).forEach(f=>{
     const r=new FileReader();
     const isImg=(f.type&&f.type.startsWith('image/'))||/\.(png|jpe?g|webp|bmp|gif)$/i.test(f.name||'');
     r.onload=async()=>{
-      const data=String(r.result||'');
+      let data=String(r.result||'');
+      if(isImg){
+        const opt=await optimizeImg(f);
+        if(opt)data=opt;
+      }
       const thumb=isImg?await makeThumb(f):'';
       curAtts.push({name:f.name||(isImg?'image.png':'file'),kind:isImg?'image':'doc',data,thumb});
       renderAtts();
