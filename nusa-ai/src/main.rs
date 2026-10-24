@@ -275,6 +275,7 @@ fn main() {
         .with_devtools(cfg!(debug_assertions))
         .with_default_context_menus(false)
         .with_browser_accelerator_keys(false)
+        .with_additional_browser_args("--renderer-process-limit=1 --disable-features=SpareRendererForSitePerProcess,AudioServiceOutOfProcess")
         .with_ipc_handler(move |req| {
             let Ok(msg) = serde_json::from_str::<Value>(req.body()) else { return };
             match msg["t"].as_str().unwrap_or("") {
@@ -303,6 +304,10 @@ fn main() {
                 "ready" => {
                     ipc_ready.store(true, Ordering::SeqCst);
                     ipc_ctrl.handle(&msg);
+                    std::thread::spawn(|| {
+                        std::thread::sleep(Duration::from_millis(1200));
+                        agent::trim_working_set();
+                    });
                 }
                 _ => ipc_ctrl.handle(&msg),
             }
@@ -367,6 +372,7 @@ fn main() {
                 if w <= 0.0 || h <= 0.0 {
                     st.panel = None;
                     notch::set_region(hwnd, None);
+                    agent::trim_working_set();
                 } else {
                     let r = ((x * s).floor() as i32, (y * s).floor() as i32, (w * s).ceil() as i32, (h * s).ceil() as i32);
                     let o = window.outer_position().map(|p| (p.x, p.y)).unwrap_or(st.origin);

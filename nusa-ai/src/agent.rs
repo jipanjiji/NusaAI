@@ -30,15 +30,70 @@ pub fn att_dir() -> PathBuf {
 /// (or stay resident in) this process.
 pub const ATT_HOST: &str = "nusa-att.localhost";
 
-/// Ask the OS to reclaim unused pages from our private working set after dropping transient buffers.
+/// Ask the OS to reclaim unused pages from our private working set and our WebView2 child processes.
 pub fn trim_working_set() {
+    #[repr(C)]
+    struct ProcessEntry32W {
+        dw_size: u32,
+        cnt_usage: u32,
+        th32_process_id: u32,
+        th32_default_heap_id: usize,
+        th32_module_id: u32,
+        cnt_threads: u32,
+        th32_parent_process_id: u32,
+        pc_pri_class_base: i32,
+        dw_flags: u32,
+        sz_exe_file: [u16; 260],
+    }
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn GetCurrentProcess() -> isize;
+        fn GetCurrentProcessId() -> u32;
         fn SetProcessWorkingSetSize(h: isize, min: usize, max: usize) -> i32;
+        fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> isize;
+        fn Process32FirstW(snap: isize, pe: *mut ProcessEntry32W) -> i32;
+        fn Process32NextW(snap: isize, pe: *mut ProcessEntry32W) -> i32;
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> isize;
+        fn CloseHandle(h: isize) -> i32;
     }
     unsafe {
         let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+        let me = GetCurrentProcessId();
+        let snap = CreateToolhelp32Snapshot(0x0000_0002, 0); // TH32CS_SNAPPROCESS
+        if snap == -1 || snap == 0 {
+            return;
+        }
+        let mut procs: Vec<(u32, u32)> = Vec::with_capacity(64);
+        let mut pe: ProcessEntry32W = std::mem::zeroed();
+        pe.dw_size = std::mem::size_of::<ProcessEntry32W>() as u32;
+        if Process32FirstW(snap, &mut pe) != 0 {
+            loop {
+                procs.push((pe.th32_process_id, pe.th32_parent_process_id));
+                if Process32NextW(snap, &mut pe) == 0 {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snap);
+        let mut tree = vec![me];
+        let mut idx = 0;
+        while idx < tree.len() {
+            let p = tree[idx];
+            idx += 1;
+            for &(cid, ppid) in &procs {
+                if ppid == p && !tree.contains(&cid) {
+                    tree.push(cid);
+                }
+            }
+        }
+        // PROCESS_SET_QUOTA (0x0100) | PROCESS_QUERY_LIMITED_INFORMATION (0x1000)
+        for &pid in tree.iter().skip(1) {
+            let h = OpenProcess(0x0100 | 0x1000, 0, pid);
+            if h != 0 {
+                let _ = SetProcessWorkingSetSize(h, usize::MAX, usize::MAX);
+                let _ = CloseHandle(h);
+            }
+        }
     }
 }
 
