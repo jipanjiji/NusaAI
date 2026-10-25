@@ -3,5 +3,8 @@ target/
 *.pdb
 *.d
 *.tmp
+*.exe
+NusaAI-Setup.exe
 
 nusa.html
+
