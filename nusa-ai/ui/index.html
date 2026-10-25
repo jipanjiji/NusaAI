@@ -288,9 +288,22 @@ function md(src){
 /* ---------- layout ----------
    phase: hidden -> opening (dot drops, stretches to pill, grows to chat) -> shown -> closing (shrinks to dot, rises into notch) -> hidden */
 const GAP=10,DOT=44,TUCK=34-DOT,SP='var(--spring)',EIN='cubic-bezier(.55,0,.75,.2)',EOUT='cubic-bezier(.4,0,.2,1)';
-let lastShape={x:0,y:0,w:0,h:0},shapeT=0,phase='hidden',timers=[],lastBase=186,geo={top:196,w:420,h:48,pill:48};
+let lastShape={x:0,y:0,w:0,h:0},lastCard={cx:0,cy:0,cw:0,ch:0},shapeT=0,phase='hidden',timers=[],lastBase=186,geo={top:196,w:420,h:48,pill:48};
 let zAbove=false;
-function sendShape(s){if(s.x===lastShape.x&&s.y===lastShape.y&&s.w===lastShape.w&&s.h===lastShape.h)return;lastShape=s;post({t:'shape',...s});syncZ()}
+function sendShape(s){
+  const isVis=(phase==='shown'||phase==='opening');
+  const card=isVis?{
+    cx:Math.floor((innerWidth-geo.w)/2),
+    cy:Math.round(geo.top),
+    cw:Math.round(geo.w),
+    ch:Math.round(geo.h),
+  }:{cx:0,cy:0,cw:0,ch:0};
+  if(s.x===lastShape.x&&s.y===lastShape.y&&s.w===lastShape.w&&s.h===lastShape.h
+     &&card.cx===lastCard.cx&&card.cy===lastCard.cy&&card.cw===lastCard.cw&&card.ch===lastCard.ch)return;
+  lastShape=s;lastCard=card;
+  post({t:'shape',...s,...card});
+  syncZ();
+}
 /* While tucked at the very top (y=0) during dot entry/exit, sit *below* Nusa so the dot slides out from behind the notch.
    As soon as it turns into the pill or is shown below y=135, go *above* Nusa so its invisible hit area can't eat clicks. */
 function syncZ(){const s=lastShape;const want=(phase==='shown'||phase==='opening')&&s.w>0&&s.y>=135;if(want!==zAbove){zAbove=want;post({t:'z',above:want})}}
@@ -800,6 +813,11 @@ $('#send').onclick=()=>{if(running)post({t:'stop'});else send()};
 $('#histb').onclick=()=>{if(view==='hist')closeHist();else post({t:'history'})};
 document.addEventListener('click',e=>{const a=e.target.closest('a[href]');if(a){e.preventDefault();post({t:'link',url:a.getAttribute('href')})}});
 document.addEventListener('contextmenu',e=>{if(!e.target.closest('input,textarea'))e.preventDefault()});
+document.addEventListener('pointerdown',e=>{
+  if(prevBox.classList.contains('on'))return;
+  if(phase!=='shown'&&phase!=='opening')return;
+  if(!e.target.closest('#panel'))post({t:'dismiss'});
+});
 
 /* ---------- events from Rust ---------- */
 window.__nusa=function(e){

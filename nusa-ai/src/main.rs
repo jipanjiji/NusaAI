@@ -25,15 +25,17 @@ const STANDALONE_W: f64 = 420.0;
 enum UserEvent {
     Js(String),
     Place { x: i32, y: i32, scale: f64 },
-    Shape { x: f64, y: f64, w: f64, h: f64 },
+    Shape { x: f64, y: f64, w: f64, h: f64, cx: f64, cy: f64, cw: f64, ch: f64 },
     Focus,
     Menu(String),
 }
 
 #[derive(Default)]
 struct WState {
-    /// Interactive panel rect in physical *screen* coordinates.
+    /// Interactive panel hit region in physical *screen* coordinates (for OS region).
     panel: Option<(i32, i32, i32, i32)>,
+    /// Exact visible AI card rect in physical *screen* coordinates.
+    card: Option<(i32, i32, i32, i32)>,
     origin: (i32, i32),
     scale: f64,
     hwnd: isize,
@@ -102,6 +104,7 @@ fn watcher(proxy: Proxy, ws: Arc<Mutex<WState>>, ready: Arc<AtomicBool>) {
     let mut last_nt: Option<(notch::Notch, Instant)> = None;
     let mut visible = false;
     let mut was_open = false;
+    let mut was_mdown = false;
     loop {
         std::thread::sleep(Duration::from_millis(33));
         if ready.swap(false, Ordering::SeqCst) {
@@ -122,21 +125,33 @@ fn watcher(proxy: Proxy, ws: Arc<Mutex<WState>>, ready: Arc<AtomicBool>) {
             }),
         };
 
-        let (hwnd, panel) = {
+        let (hwnd, panel, card) = {
             let w = ws.lock().unwrap();
-            (w.hwnd, w.panel)
+            (w.hwnd, w.panel, w.card)
         };
         if hwnd == 0 {
             continue;
         }
         let (cx, cy) = notch::cursor();
         let in_panel = panel.map(|(x, y, w, h)| cx >= x && cx < x + w && cy >= y && cy < y + h).unwrap_or(false);
-        if in_panel {
+        let in_card = card.map(|(x, y, w, h)| cx >= x && cx < x + w && cy >= y && cy < y + h).unwrap_or(in_panel);
+        if in_card {
             last_in = Instant::now();
         }
 
+        let mdown = notch::mouse_down();
+        let click_started = mdown && !was_mdown;
+        was_mdown = mdown;
+
+        let in_notch = n.as_ref().map(|nt| {
+            cx >= nt.rect.left && cx <= nt.rect.right && cy >= nt.rect.top && cy <= nt.rect.bottom
+        }).unwrap_or(false);
+
         let (mode, width, top) = match n {
-            None => ("hidden", STANDALONE_W, ATTACH_TOP),
+            None => {
+                ws.lock().unwrap().dismissed = false;
+                ("hidden", STANDALONE_W, ATTACH_TOP)
+            }
             Some(nt) => {
                 let s = nt.scale;
                 let center = (nt.rect.left + nt.rect.right) / 2;
@@ -149,29 +164,43 @@ fn watcher(proxy: Proxy, ws: Arc<Mutex<WState>>, ready: Arc<AtomicBool>) {
                     && cx <= center + (240.0 * s) as i32
                     && cy >= nt.rect.top
                     && cy < nt.rect.top + (195.0 * s) as i32;
-                let mdown = notch::mouse_down();
+
                 let open = match nt.kind {
                     notch::Kind::Open => true,
-                    notch::Kind::Anim => in_body || in_panel,
-                    _ => in_body && mdown,
+                    notch::Kind::Anim => in_body || in_card,
+                    _ => false,
                 };
-                if open && !was_open {
+
+                // Reset dismissed when notch opens, closes completely when hidden, or when notch is clicked
+                if (open && !was_open) || (!open && !visible) || (open && click_started && in_notch) {
                     ws.lock().unwrap().dismissed = false;
                 }
                 was_open = open;
+
+                // Click-outside detection: auto-close panel if clicked anywhere outside the AI card
+                if visible && click_started && !in_card {
+                    let mut w = ws.lock().unwrap();
+                    w.dismissed = true;
+                    w.focused = false;
+                    last_in = Instant::now() - Duration::from_secs(60);
+                }
+
                 let (dismissed, mut focused) = {
                     let w = ws.lock().unwrap();
                     (w.dismissed, w.focused)
                 };
+                if dismissed {
+                    last_in = Instant::now() - Duration::from_secs(60);
+                }
                 let fg = notch::foreground() == hwnd;
                 let reloading = notch::recently_reloaded(3000);
-                if focused && !fg && !in_panel && !in_body && !reloading && !mdown {
+                if focused && !fg && !in_card && !reloading && !mdown {
                     ws.lock().unwrap().focused = false;
                     focused = false;
                 }
                 let active_below = !dismissed
                     && visible
-                    && (in_panel || in_body || fg || focused || reloading || mdown || last_in.elapsed() < Duration::from_millis(850));
+                    && (in_card || fg || focused || reloading || last_in.elapsed() < Duration::from_millis(850));
                 if (open || active_below) && !dismissed {
                     ("attached", nt.body_w.max(STANDALONE_W), nt.bottom)
                 } else {
@@ -286,6 +315,10 @@ fn main() {
                         y: msg["y"].as_f64().unwrap_or(0.0),
                         w: msg["w"].as_f64().unwrap_or(0.0),
                         h: msg["h"].as_f64().unwrap_or(0.0),
+                        cx: msg["cx"].as_f64().unwrap_or(0.0),
+                        cy: msg["cy"].as_f64().unwrap_or(0.0),
+                        cw: msg["cw"].as_f64().unwrap_or(0.0),
+                        ch: msg["ch"].as_f64().unwrap_or(0.0),
                     },
                 ),
                 "dismiss" => {
@@ -365,19 +398,26 @@ fn main() {
                     notch::set_region(hwnd, None);
                 }
             }
-            Event::UserEvent(UserEvent::Shape { x, y, w, h }) => {
+            Event::UserEvent(UserEvent::Shape { x, y, w, h, cx, cy, cw, ch }) => {
                 let mut st = ws.lock().unwrap();
                 let s = window.scale_factor();
                 st.scale = s;
+                let o = window.outer_position().map(|p| (p.x, p.y)).unwrap_or(st.origin);
+                st.origin = o;
                 if w <= 0.0 || h <= 0.0 {
                     st.panel = None;
+                    st.card = None;
                     notch::set_region(hwnd, None);
                     agent::trim_working_set();
                 } else {
                     let r = ((x * s).floor() as i32, (y * s).floor() as i32, (w * s).ceil() as i32, (h * s).ceil() as i32);
-                    let o = window.outer_position().map(|p| (p.x, p.y)).unwrap_or(st.origin);
-                    st.origin = o;
                     st.panel = Some((o.0 + r.0, o.1 + r.1, r.2, r.3));
+                    if cw > 0.0 && ch > 0.0 {
+                        let cr = ((cx * s).floor() as i32, (cy * s).floor() as i32, (cw * s).ceil() as i32, (ch * s).ceil() as i32);
+                        st.card = Some((o.0 + cr.0, o.1 + cr.1, cr.2, cr.3));
+                    } else {
+                        st.card = None;
+                    }
                     notch::set_region(hwnd, Some(r));
                 }
             }

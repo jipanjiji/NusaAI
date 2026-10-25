@@ -83,8 +83,11 @@ pub fn foreground() -> isize {
 }
 
 pub fn mouse_down() -> bool {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
-    unsafe { (GetAsyncKeyState(VK_LBUTTON as i32) as u16 & 0x8000) != 0 }
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+    unsafe {
+        ((GetAsyncKeyState(VK_LBUTTON as i32) as u16 & 0x8000) != 0)
+            || ((GetAsyncKeyState(VK_RBUTTON as i32) as u16 & 0x8000) != 0)
+    }
 }
 
 pub fn activate(hwnd: isize) {
