@@ -451,6 +451,7 @@ pub fn build_antigravity_payload(
 
     // Map of tool_call_id -> function name
     let mut tool_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut legacy_tool_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for m in messages {
         let role = m["role"].as_str().unwrap_or("");
@@ -515,12 +516,30 @@ pub fn build_antigravity_payload(
                         if !id.is_empty() && !name.is_empty() {
                             tool_names.insert(id.to_string(), name.to_string());
                         }
-                        parts.push(json!({
-                            "functionCall": {
-                                "name": name,
-                                "args": args
+
+                        let sig = c.get("thought_signature")
+                            .or_else(|| c.get("thoughtSignature"))
+                            .and_then(|s| s.as_str())
+                            .filter(|s| !s.trim().is_empty());
+
+                        if let Some(s) = sig {
+                            parts.push(json!({
+                                "thoughtSignature": s,
+                                "functionCall": {
+                                    "name": name,
+                                    "args": args
+                                }
+                            }));
+                        } else {
+                            // If missing thoughtSignature (e.g. legacy/cross-provider tool call),
+                            // serialize as text so Gemini doesn't reject with 400!
+                            if !id.is_empty() {
+                                legacy_tool_ids.insert(id.to_string());
                             }
-                        }));
+                            parts.push(json!({
+                                "text": format!("[Called tool '{}' with arguments: {}]", name, args_str)
+                            }));
+                        }
                     }
                 }
                 if !parts.is_empty() {
@@ -534,16 +553,26 @@ pub fn build_antigravity_payload(
                 let id = m["tool_call_id"].as_str().unwrap_or("");
                 let name = tool_names.get(id).map(|s| s.as_str()).unwrap_or("tool");
                 let content_str = m["content"].as_str().unwrap_or("");
-                let resp_obj = json!({ "output": content_str });
-                contents.push(json!({
-                    "role": "user",
-                    "parts": [{
-                        "functionResponse": {
-                            "name": name,
-                            "response": resp_obj
-                        }
-                    }]
-                }));
+
+                if legacy_tool_ids.contains(id) {
+                    contents.push(json!({
+                        "role": "user",
+                        "parts": [{
+                            "text": format!("[Tool result for '{}': {}]", name, content_str)
+                        }]
+                    }));
+                } else {
+                    let resp_obj = json!({ "output": content_str });
+                    contents.push(json!({
+                        "role": "user",
+                        "parts": [{
+                            "functionResponse": {
+                                "name": name,
+                                "response": resp_obj
+                            }
+                        }]
+                    }));
+                }
             }
             _ => {}
         }
@@ -697,6 +726,7 @@ pub fn stream(
     let mut calls: Vec<Value> = Vec::new();
     let mut thinking_off = false;
     let mut think_ms: Option<u64> = None;
+    let mut latest_thought_sig: Option<String> = None;
 
     for line in reader.lines() {
         if cancel.load(Ordering::SeqCst) {
@@ -742,19 +772,47 @@ pub fn stream(
                             }
                         }
 
+                        if let Some(sig) = p.get("thoughtSignature")
+                            .or_else(|| p.get("thought_signature"))
+                            .and_then(|s| s.as_str())
+                        {
+                            if !sig.is_empty() {
+                                latest_thought_sig = Some(sig.to_string());
+                            }
+                        }
+
                         if let Some(fc) = p.get("functionCall") {
                             let name = fc.get("name").and_then(|n| n.as_str()).unwrap_or("");
                             let args = fc.get("args").cloned().unwrap_or(json!({}));
                             let args_s = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string());
+                            let call_id = fc.get("id").and_then(|s| s.as_str()).unwrap_or("");
                             let idx = calls.len();
-                            calls.push(json!({
-                                "id": format!("call_{}_{}", chrono::Local::now().timestamp_millis(), idx),
+                            let id = if !call_id.is_empty() {
+                                call_id.to_string()
+                            } else {
+                                format!("call_{}_{}", chrono::Local::now().timestamp_millis(), idx)
+                            };
+
+                            let sig = p.get("thoughtSignature")
+                                .or_else(|| p.get("thought_signature"))
+                                .or_else(|| fc.get("thoughtSignature"))
+                                .or_else(|| fc.get("thought_signature"))
+                                .and_then(|s| s.as_str())
+                                .map(|s| s.to_string())
+                                .or_else(|| latest_thought_sig.clone());
+
+                            let mut call_val = json!({
+                                "id": id,
                                 "type": "function",
                                 "function": {
                                     "name": name,
                                     "arguments": args_s
                                 }
-                            }));
+                            });
+                            if let Some(s) = sig {
+                                call_val["thought_signature"] = json!(s);
+                            }
+                            calls.push(call_val);
                         }
                     }
                 }
@@ -768,4 +826,81 @@ pub fn stream(
     }
 
     Ok((content, calls, reasoning, final_ms))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_payload_with_thought_signature() {
+        let msgs = vec![
+            json!({"role": "user", "content": "halo"}),
+            json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {"name": "shell", "arguments": "{\"command\":\"dir\"}"},
+                        "thought_signature": "valid_sig_base64_abc"
+                    }
+                ]
+            }),
+            json!({
+                "role": "tool",
+                "tool_call_id": "call_123",
+                "content": "output from dir"
+            })
+        ];
+        let payload = build_antigravity_payload("test-proj", DEFAULT_MODEL, &msgs, &[]);
+        let contents = payload["request"]["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 3);
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(contents[1]["role"], "model");
+        
+        let model_part = &contents[1]["parts"][0];
+        assert_eq!(model_part["thoughtSignature"], "valid_sig_base64_abc");
+        assert_eq!(model_part["functionCall"]["name"], "shell");
+
+        let tool_part = &contents[2]["parts"][0];
+        assert_eq!(tool_part["functionResponse"]["name"], "shell");
+        assert_eq!(tool_part["functionResponse"]["response"]["output"], "output from dir");
+    }
+
+    #[test]
+    fn test_payload_legacy_without_thought_signature_falls_back_to_text() {
+        let msgs = vec![
+            json!({"role": "user", "content": "halo"}),
+            json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_legacy_456",
+                        "type": "function",
+                        "function": {"name": "shell", "arguments": "{\"command\":\"echo test\"}"}
+                    }
+                ]
+            }),
+            json!({
+                "role": "tool",
+                "tool_call_id": "call_legacy_456",
+                "content": "test"
+            })
+        ];
+        let payload = build_antigravity_payload("test-proj", DEFAULT_MODEL, &msgs, &[]);
+        let contents = payload["request"]["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 3);
+        
+        let model_part = &contents[1]["parts"][0];
+        // Must NOT have functionCall because that would cause 400!
+        assert!(model_part.get("functionCall").is_none());
+        assert!(model_part["text"].as_str().unwrap().contains("[Called tool 'shell'"));
+
+        let tool_part = &contents[2]["parts"][0];
+        assert!(tool_part.get("functionResponse").is_none());
+        assert!(tool_part["text"].as_str().unwrap().contains("[Tool result for 'shell'"));
+    }
 }
