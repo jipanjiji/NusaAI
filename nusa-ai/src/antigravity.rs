@@ -25,10 +25,11 @@ pub const REDIRECT_URI: &str = "http://localhost:51121/oauth-callback";
 pub const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
-pub const LOAD_CODE_ASSIST_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
-pub const STREAM_GENERATE_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse";
+pub const LOAD_CODE_ASSIST_URL: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+pub const STREAM_GENERATE_URL: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse";
 
-pub const DEFAULT_MODEL: &str = "gemini-3.8-flash";
+pub const DEFAULT_MODEL: &str = "gemini-3.8-flash-tiered";
+pub const FALLBACK_MODEL: &str = "gemini-3-flash";
 
 pub const SCOPES: &[&str] = &[
     "https://www.googleapis.com/auth/cloud-platform",
@@ -62,7 +63,7 @@ pub fn load_token() -> Option<AntigravityToken> {
     let p = token_path();
     let text = std::fs::read_to_string(&p).ok()?;
     let mut token: AntigravityToken = serde_json::from_str(&text).ok()?;
-    if token.model.trim().is_empty() {
+    if token.model.trim().is_empty() || token.model == "gemini-3.8-flash" {
         token.model = DEFAULT_MODEL.to_string();
     }
     Some(token)
@@ -642,7 +643,7 @@ pub fn stream(
     let body_s = payload.to_string();
 
     let agent = new_http_agent();
-    let resp = agent
+    let mut resp = agent
         .post(STREAM_GENERATE_URL)
         .header("Accept", "text/event-stream")
         .header("Authorization", &format!("Bearer {}", token.access_token))
@@ -653,10 +654,33 @@ pub fn stream(
         .send(body_s.as_bytes())
         .map_err(|e| format!("Antigravity connection failed: {e}"))?;
 
+    let mut status = resp.status().as_u16();
+    if status >= 400 {
+        // Automatic fallback to FALLBACK_MODEL (gemini-3-flash)
+        if model_name != FALLBACK_MODEL {
+            let fb_payload = build_antigravity_payload(&token.project_id, FALLBACK_MODEL, messages, specs);
+            let fb_body_s = fb_payload.to_string();
+            if let Ok(r) = agent
+                .post(STREAM_GENERATE_URL)
+                .header("Accept", "text/event-stream")
+                .header("Authorization", &format!("Bearer {}", token.access_token))
+                .header("Content-Type", "application/json")
+                .header("User-Agent", "antigravity/1.15.8 windows/amd64")
+                .header("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+                .header("Client-Metadata", "{\"ideType\":\"ANTIGRAVITY\",\"platform\":\"WINDOWS\",\"pluginType\":\"GEMINI\"}")
+                .send(fb_body_s.as_bytes())
+            {
+                if r.status().as_u16() < 400 {
+                    resp = r;
+                    status = resp.status().as_u16();
+                }
+            }
+        }
+    }
+
     drop(body_s);
     trim_working_set();
 
-    let status = resp.status().as_u16();
     if status >= 400 {
         let mut resp = resp;
         let t = resp.body_mut().read_to_string().unwrap_or_default();
