@@ -218,6 +218,7 @@ button{font:inherit;color:inherit;border:0;background:none;cursor:default;outlin
     <div id="todo"><div id="todoHead"><div class="bar"><i></i></div><div class="cur"></div><span class="cnt"></span></div><div id="todoList"></div></div>
     <div id="atts"></div>
     <input type="file" id="fileIn" multiple accept="image/*,.pdf,.docx,.xlsx,.pptx,.odt,.rtf,.txt,.csv,.md,.json" style="display:none">
+    <div id="cfgModal" class="m card" style="display:none;position:absolute;bottom:54px;left:10px;right:10px;z-index:99;background:#181920;border:1px solid rgba(255,255,255,.15);box-shadow:0 12px 32px rgba(0,0,0,.7);border-radius:16px;padding:14px;"></div>
     <div id="bar">
       <button class="ib" id="histb" title="Conversation history">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>
@@ -241,7 +242,7 @@ const $=s=>document.querySelector(s);
 const post=o=>{try{window.ipc.postMessage(JSON.stringify(o))}catch(e){}};
 const panel=$('#panel'),inp=$('#inp'),msgs=$('#msgs'),chat=$('#chat'),hist=$('#hist'),wrap=$('#chatWrap');
 let L={mode:'hidden',top:186,width:420};
-let running=false,view='chat',curAi=null,curAiText='',thinkEl=null,todos=[],convId='',stick=true,rafR=0,rafL=0,cfgOk=true;
+let running=false,view='chat',curAi=null,curAiText='',thinkEl=null,todos=[],convId='',stick=true,rafR=0,rafL=0,cfgOk=true,agState={connected:false,email:'',name:'',model:'gemini-3.8-flash'};
 
 function el(tag,cls,html){const e=document.createElement(tag);if(cls)e.className=cls;if(html!=null)e.innerHTML=html;return e}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -682,14 +683,79 @@ function renderTodos(items){
 }
 $('#todoHead').onclick=()=>{$('#todo').classList.toggle('open');layout('content')};
 
+function renderCfgModal(){
+  const m=$('#cfgModal');
+  if(!m)return;
+  if(agState.connected){
+    m.innerHTML='<div class="tt" style="justify-content:space-between;margin-bottom:10px;">'+
+      '<div style="display:flex;align-items:center;gap:6px;"><i class="dot"></i>AI & Model Provider</div>'+
+      '<button class="ib" id="closeCfgModal" style="width:22px;height:22px;padding:0;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
+      '</div>'+
+      '<div style="font-size:12px;color:#4ade80;display:flex;align-items:center;gap:6px;margin:4px 0 10px;">'+
+      '<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>'+
+      '<span>Google Antigravity: <b>'+esc(agState.email)+'</b></span></div>'+
+      '<div style="font-size:11.5px;color:var(--dim);margin-bottom:5px;">Model:</div>'+
+      '<select id="agModelSel" style="background:#252733;color:#fff;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:5px 8px;font-size:12px;width:100%;outline:0;margin-bottom:12px;">'+
+      '<option value="gemini-3.8-flash" '+(agState.model==='gemini-3.8-flash'?'selected':'')+'>gemini-3.8-flash (Recommended)</option>'+
+      '<option value="gemini-2.0-flash" '+(agState.model==='gemini-2.0-flash'?'selected':'')+'>gemini-2.0-flash</option>'+
+      '</select>'+
+      '<div class="btns" style="justify-content:space-between;margin-top:0;">'+
+      '<button class="pb" id="agLogoutBtn" style="color:#f87171;">Keluar Akun</button>'+
+      '<button class="pb txt" id="openNotepadBtn">Config.json</button>'+
+      '</div>';
+    m.querySelector('#closeCfgModal').onclick=()=>{m.style.display='none'};
+    m.querySelector('#agModelSel').onchange=e=>post({t:'ag_set_model',model:e.target.value});
+    m.querySelector('#agLogoutBtn').onclick=()=>{post({t:'ag_logout'});m.style.display='none'};
+    m.querySelector('#openNotepadBtn').onclick=()=>{post({t:'config'});m.style.display='none'};
+  } else {
+    m.innerHTML='<div class="tt" style="justify-content:space-between;margin-bottom:10px;">'+
+      '<div style="display:flex;align-items:center;gap:6px;"><i class="dot"></i>AI & Model Provider</div>'+
+      '<button class="ib" id="closeCfgModal" style="width:22px;height:22px;padding:0;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6L6 18M6 6l12 12"/></svg></button>'+
+      '</div>'+
+      '<p style="font-size:12px;color:rgba(255,255,255,.75);margin:0 0 12px;line-height:1.5;">'+
+      'Login dengan akun Google kamu untuk memakai kuota <b>Google Antigravity (Gemini 3.8 Flash)</b> langsung secara gratis.'+
+      '</p>'+
+      '<div class="btns" style="flex-direction:column;align-items:stretch;gap:8px;margin-top:0;">'+
+      '<button class="pb pri" id="modalAgLoginBtn" style="display:flex;align-items:center;justify-content:center;gap:8px;height:32px;">'+
+      '<svg width="15" height="15" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>'+
+      'Login Google (Antigravity)'+
+      '</button>'+
+      '<button class="pb" id="modalOpenNotepadBtn" style="height:30px;">Custom API Config (Notepad)</button>'+
+      '</div>';
+    m.querySelector('#closeCfgModal').onclick=()=>{m.style.display='none'};
+    m.querySelector('#modalAgLoginBtn').onclick=()=>{
+      post({t:'ag_login'});
+      m.querySelector('#modalAgLoginBtn').innerText='Membuka browser login...';
+    };
+    m.querySelector('#modalOpenNotepadBtn').onclick=()=>{post({t:'config'});m.style.display='none'};
+  }
+}
+function toggleCfgModal(){
+  const m=$('#cfgModal');
+  if(!m)return;
+  if(m.style.display==='none'||!m.style.display){renderCfgModal();m.style.display='block'}
+  else{m.style.display='none'}
+}
 function showSetupCard(){
   let c=$('#setupCard');
   if(!c){
     c=el('div','m card');c.id='setupCard';
-    c.innerHTML='<div class="tt"><i class="dot"></i>Setup AI Configuration</div>'+
-      '<pre>Atur api_key, base_url, dan model di config.json\n(%APPDATA%\\NusaAI\\config.json) sebelum mulai chat.</pre>'+
-      '<div class="btns"><button class="pb pri" id="setupBtn">Setup Config (Buka di Notepad)</button></div>';
-    c.querySelector('#setupBtn').onclick=()=>post({t:'config'});
+    c.innerHTML='<div class="tt"><i class="dot"></i>Hubungkan AI Engine</div>'+
+      '<p style="font-size:12px;color:rgba(255,255,255,.75);margin:0 0 10px;line-height:1.5;">'+
+      'Login dengan akun Google kamu untuk langsung memakai kuota <b>Google Antigravity (Gemini 3.8 Flash)</b> tanpa API key, atau gunakan Custom API di config.json.'+
+      '</p>'+
+      '<div class="btns" style="gap:8px;">'+
+        '<button class="pb pri" id="cardAgLoginBtn" style="display:flex;align-items:center;gap:6px;">'+
+          '<svg width="14" height="14" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>'+
+          'Login Google (Antigravity)'+
+        '</button>'+
+        '<button class="pb txt" id="cardCustomBtn">Buka config.json</button>'+
+      '</div>';
+    c.querySelector('#cardAgLoginBtn').onclick=()=>{
+      post({t:'ag_login'});
+      c.querySelector('#cardAgLoginBtn').innerText='Membuka browser login...';
+    };
+    c.querySelector('#cardCustomBtn').onclick=()=>post({t:'config'});
     msgs.append(c);
   }
   scrollEnd();
@@ -757,7 +823,7 @@ function send(){
   curAtts=[];renderAtts();
   addUser(t,imgs,docs);post({t:'send',text:t,attachments:atts});inp.value='';autosize();setRunning(true);showThink();updSend();
 }
-$('#cfgb').onclick=()=>post({t:'config'});
+$('#cfgb').onclick=toggleCfgModal;
 $('#attb').onclick=()=>$('#fileIn').click();
 $('#fileIn').onchange=e=>{addFiles(e.target.files);e.target.value=''};
 document.addEventListener('paste',e=>{
@@ -845,6 +911,7 @@ window.__nusa=function(e){
     if(e.partial){ensureAi();curAiRaw=e.partial;const sp=splitThink(curAiRaw);curAiText=sp.text;curAi.innerHTML=md(curAiText)}
     if(running)showThink();
     renderTodos(e.todos||[]);updSend();
+    if(e.ag)agState=e.ag;
     if(e.configured!==undefined)syncCfgState(e.configured);
     if(view==='hist')closeHist();
     layout('mode');chat.scrollTop=chat.scrollHeight;stick=true;
@@ -852,6 +919,19 @@ window.__nusa=function(e){
     break}
   case 'setup':setRunning(false);hideThink();syncCfgState(false);break;
   case 'cfg':syncCfgState(e.ok);break;
+  case 'ag_status':
+    agState=e;
+    if(e.connected)syncCfgState(true);
+    renderCfgModal();
+    break;
+  case 'ag_logging_in':
+    inp.placeholder='Membuka browser untuk login Google...';
+    break;
+  case 'ag_error':
+    setRunning(false);
+    msgs.append(el('div','m err',esc('Login Antigravity gagal: '+e.error)));
+    scrollEnd();
+    break;
   case 'more':{
     if(e.id!==convId){loadingMore=false;break}
     convStart=e.start||0;

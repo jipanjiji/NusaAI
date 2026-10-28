@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod agent;
+mod antigravity;
 mod notch;
 mod tools;
 

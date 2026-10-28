@@ -231,6 +231,8 @@ fn image_data_url(im: &Value) -> Option<String> {
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Config {
     #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
     pub api_key: String,
     #[serde(default)]
     pub base_url: String,
@@ -244,6 +246,7 @@ impl Config {
     }
     pub fn load() -> Config {
         let def = Config {
+            provider: String::new(),
             api_key: String::new(),
             base_url: String::new(),
             model: String::new(),
@@ -264,6 +267,9 @@ impl Config {
         c
     }
     pub fn is_configured(&self) -> bool {
+        if crate::antigravity::is_authenticated() && self.provider != "custom" {
+            return true;
+        }
         !self.api_key.trim().is_empty()
             && !self.base_url.trim().is_empty()
             && !self.model.trim().is_empty()
@@ -384,9 +390,71 @@ impl Controller {
 
     pub fn handle(&self, msg: &Value) {
         match msg["t"].as_str().unwrap_or("") {
-            "ready" => self.push_conv(),
+            "ready" => {
+                self.push_conv();
+                let mut status = crate::antigravity::status_json();
+                status["t"] = json!("ag_status");
+                (self.emit)(status);
+            }
             "config" => Config::open_in_notepad(),
-            "check_cfg" => (self.emit)(json!({"t": "cfg", "ok": Config::load().is_configured()})),
+            "check_cfg" => {
+                (self.emit)(json!({"t": "cfg", "ok": Config::load().is_configured()}));
+                let mut status = crate::antigravity::status_json();
+                status["t"] = json!("ag_status");
+                (self.emit)(status);
+            }
+            "ag_login" => {
+                let emit = self.emit.clone();
+                std::thread::spawn(move || {
+                    emit(json!({"t": "ag_logging_in"}));
+                    match crate::antigravity::start_oauth_flow() {
+                        Ok(token) => {
+                            emit(json!({
+                                "t": "ag_status",
+                                "connected": true,
+                                "email": token.email,
+                                "model": token.model,
+                                "name": token.name,
+                            }));
+                            emit(json!({"t": "cfg", "ok": true}));
+                        }
+                        Err(e) => {
+                            emit(json!({
+                                "t": "ag_error",
+                                "error": e
+                            }));
+                        }
+                    }
+                });
+            }
+            "ag_logout" => {
+                crate::antigravity::clear_token();
+                (self.emit)(json!({
+                    "t": "ag_status",
+                    "connected": false,
+                    "email": "",
+                    "name": "",
+                    "project_id": "",
+                    "model": crate::antigravity::DEFAULT_MODEL,
+                }));
+                (self.emit)(json!({"t": "cfg", "ok": Config::load().is_configured()}));
+            }
+            "ag_status" => {
+                let mut status = crate::antigravity::status_json();
+                status["t"] = json!("ag_status");
+                (self.emit)(status);
+            }
+            "ag_set_model" => {
+                if let Some(m) = msg["model"].as_str() {
+                    if let Some(mut token) = crate::antigravity::load_token() {
+                        token.model = m.to_string();
+                        let _ = crate::antigravity::save_token(&token);
+                        let mut status = crate::antigravity::status_json();
+                        status["t"] = json!("ag_status");
+                        (self.emit)(status);
+                    }
+                }
+            }
             "send" => {
                 if !Config::load().is_configured() {
                     (self.emit)(json!({"t": "setup"}));
@@ -474,6 +542,7 @@ impl Controller {
             "todos": st.conv.todos,
             "running": st.running,
             "configured": Config::load().is_configured(),
+            "ag": crate::antigravity::status_json(),
         });
         if st.running && !st.partial.is_empty() {
             ev["partial"] = json!(st.partial);
@@ -859,6 +928,9 @@ impl Controller {
     }
 
     fn stream(&self, cfg: &Config, messages: &[Value], specs: &[Value], cancel: &Arc<AtomicBool>) -> Result<(String, Vec<Value>, String, u64), String> {
+        if crate::antigravity::is_authenticated() && cfg.provider != "custom" {
+            return crate::antigravity::stream(&self.emit, messages, specs, cancel);
+        }
         let t0 = std::time::Instant::now();
         let body = json!({
             "model": cfg.model,
@@ -1087,7 +1159,7 @@ fn build_messages_ex(msgs: &[Value], use_vision: bool) -> Vec<Value> {
         "\n\n[Reply strictly in English]"
     };
     let last_user_idx = msgs.iter().rposition(|m| m["role"] == "user");
-    let last_img_user_idx = msgs.iter().rposition(|m| {
+    let _last_img_user_idx = msgs.iter().rposition(|m| {
         m["role"] == "user" && m["images"].as_array().map(|a| !a.is_empty()).unwrap_or(false)
     });
     let mut out = vec![json!({"role":"system","content":system_prompt(last_user)})];
